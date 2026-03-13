@@ -14,6 +14,19 @@ function isAxiosNotFoundError(error) {
   return axios.isAxiosError(error) && error.response?.status === 404;
 }
 
+function buildWebhookUrl() {
+  if (!env.publicWebhookUrl) {
+    return '';
+  }
+
+  const baseUrl = env.publicWebhookUrl.replace(/\/$/, '');
+  const queryString = env.evolutionWebhookSecret
+    ? `?secret=${encodeURIComponent(env.evolutionWebhookSecret)}`
+    : '';
+
+  return `${baseUrl}/webhook/evolution${queryString}`;
+}
+
 const TYPING_BPM = 500;
 const MIN_TYPING_MS = 800;
 const MAX_TYPING_MS = 7000;
@@ -95,10 +108,15 @@ export async function connectEvolutionInstance() {
 }
 
 async function createEvolutionInstance() {
+  const webhookUrl = buildWebhookUrl();
+
   const response = await evolutionClient.post('/instance/create', {
     instanceName: env.evolutionInstance,
     integration: 'WHATSAPP-BAILEYS',
     qrcode: true,
+    webhook: webhookUrl || undefined,
+    webhook_by_events: Boolean(webhookUrl),
+    events: webhookUrl ? ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'] : undefined,
     rejectCall: true,
     msgCall: 'No momento nao atendemos chamadas por aqui.',
     groupsIgnore: true,

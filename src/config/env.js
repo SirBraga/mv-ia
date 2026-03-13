@@ -31,6 +31,7 @@ export const env = {
   evolutionApiKey: process.env.EVOLUTION_API_KEY || '',
   evolutionInstance: process.env.EVOLUTION_INSTANCE || '',
   evolutionWebhookSecret: process.env.EVOLUTION_WEBHOOK_SECRET || '',
+  publicWebhookUrl: process.env.PUBLIC_WEBHOOK_URL || '',
   baseSystemPrompt: readBaseSystemPrompt(),
   minAnswerLength: Number(process.env.MIN_ANSWER_LENGTH || 12),
 };
