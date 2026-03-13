@@ -17,6 +17,33 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
+async function handleEvolutionWebhookRequest(req, res, next) {
+  try {
+    const headerSecret = req.header('x-webhook-secret') || req.header('x-evolution-secret') || '';
+    const querySecret = typeof req.query.secret === 'string' ? req.query.secret : '';
+    const providedSecret = headerSecret || querySecret;
+
+    if (env.evolutionWebhookSecret && providedSecret !== env.evolutionWebhookSecret) {
+      return res.status(401).json({ error: 'Webhook nao autorizado' });
+    }
+
+    const normalized = normalizeEvolutionWebhook(req.body);
+
+    if (!normalized.isValidTextMessage) {
+      return res.status(200).json({ ignored: true, reason: 'payload_without_supported_text_message' });
+    }
+
+    const result = await handleIncomingAnswer({
+      contactId: normalized.contactId,
+      text: normalized.text
+    });
+
+    return res.status(200).json({ ok: true, result });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 router.get('/health', (_req, res) => {
   res.json({ ok: true, uptime: process.uptime() });
 });
@@ -189,31 +216,7 @@ router.get('/evolution/qrcode', async (_req, res) => {
   }
 });
 
-router.post('/webhook/evolution', async (req, res, next) => {
-  try {
-    const headerSecret = req.header('x-webhook-secret') || req.header('x-evolution-secret') || '';
-    const querySecret = typeof req.query.secret === 'string' ? req.query.secret : '';
-    const providedSecret = headerSecret || querySecret;
-
-    if (env.evolutionWebhookSecret && providedSecret !== env.evolutionWebhookSecret) {
-      return res.status(401).json({ error: 'Webhook nao autorizado' });
-    }
-
-    const normalized = normalizeEvolutionWebhook(req.body);
-
-    if (!normalized.isValidTextMessage) {
-      return res.status(200).json({ ignored: true, reason: 'payload_without_supported_text_message' });
-    }
-
-    const result = await handleIncomingAnswer({
-      contactId: normalized.contactId,
-      text: normalized.text
-    });
-
-    return res.status(200).json({ ok: true, result });
-  } catch (error) {
-    return next(error);
-  }
-});
+router.post('/webhook/evolution', handleEvolutionWebhookRequest);
+router.post('/messages-upsert', handleEvolutionWebhookRequest);
 
 export default router;
