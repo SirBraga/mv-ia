@@ -19,14 +19,6 @@ function escapeHtml(value) {
 
 async function handleEvolutionWebhookRequest(req, res, next) {
   try {
-    const headerSecret = req.header('x-webhook-secret') || req.header('x-evolution-secret') || '';
-    const querySecret = typeof req.query.secret === 'string' ? req.query.secret : '';
-    const providedSecret = headerSecret || querySecret;
-
-    if (env.evolutionWebhookSecret && providedSecret !== env.evolutionWebhookSecret) {
-      return res.status(401).json({ error: 'Webhook nao autorizado' });
-    }
-
     const normalized = normalizeEvolutionWebhook(req.body);
 
     if (!normalized.isValidTextMessage) {
