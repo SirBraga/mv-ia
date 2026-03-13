@@ -1,0 +1,17 @@
+{
+  "name": "mv-ia",
+  "version": "1.0.0",
+  "description": "Backend Node.js com Groq e Evolution API para fluxo de qualificação via WhatsApp",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "dev": "node --watch src/index.js",
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "axios": "^1.8.4",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "groq-sdk": "^0.25.0"
+  }
+}

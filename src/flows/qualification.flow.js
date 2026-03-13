@@ -1,0 +1,119 @@
+import { env } from '../config/env.js';
+import { createSession, deleteSession, getSession, saveSession } from '../store/session-store.js';
+import { referralCompletionMessage, referralSteps } from '../config/referral-flow.js';
+import { sendTextMessage } from '../services/evolution.service.js';
+import { runReferralStepConversation } from '../services/groq.service.js';
+import { saveIndication } from '../services/indication-store.service.js';
+
+function isObviouslyInsufficient(answer) {
+  if (!answer) {
+    return true;
+  }
+
+  const normalized = answer.trim().toLowerCase();
+  const vagueAnswers = ['sim', 'nao', 'talvez', 'ok', 'acho', 'sei la', 'nada', 'ajuda'];
+
+  return normalized.length < env.minAnswerLength || vagueAnswers.includes(normalized);
+}
+
+function buildIndicationPayload(session) {
+  return {
+    createdAt: new Date().toISOString(),
+    referrerWhatsapp: session.contactId,
+    customerIdentification: session.answers[0] || '',
+    referralCompanyAndContact: session.answers[1] || '',
+    referralPhone: session.answers[2] || ''
+  };
+}
+
+export async function startQualification(contactId) {
+  const session = createSession(contactId);
+  const firstStep = referralSteps[0];
+  const groqResponse = await runReferralStepConversation({
+    currentStep: firstStep,
+    previousAnswers: [],
+    latestUserMessage: '',
+    isFirstMessage: true
+  });
+
+  await sendTextMessage({
+    number: contactId,
+    text: groqResponse.reply
+  });
+
+  return session;
+}
+
+export async function handleIncomingAnswer({ contactId, text }) {
+  let session = getSession(contactId);
+
+  if (!session) {
+    session = await startQualification(contactId);
+    return { status: 'started' };
+  }
+
+  if (session.status !== 'collecting') {
+    return { status: 'ignored' };
+  }
+
+  const currentStep = referralSteps[session.currentQuestionIndex];
+  const groqResponse = await runReferralStepConversation({
+    currentStep,
+    previousAnswers: session.answers,
+    latestUserMessage: text
+  });
+
+  if (isObviouslyInsufficient(text) && !groqResponse.satisfactory) {
+    session.repromptCount += 1;
+    saveSession(contactId, session);
+
+    await sendTextMessage({
+      number: contactId,
+      text: groqResponse.reply
+    });
+
+    return { status: 'reprompted', reason: 'too_short' };
+  }
+
+  if (!groqResponse.satisfactory) {
+    session.repromptCount += 1;
+    saveSession(contactId, session);
+
+    await sendTextMessage({
+      number: contactId,
+      text: groqResponse.reply
+    });
+
+    return { status: 'reprompted', reason: 'insufficient_context' };
+  }
+
+  session.answers[session.currentQuestionIndex] = groqResponse.extractedValue || text;
+  session.currentQuestionIndex += 1;
+  session.repromptCount = 0;
+
+  if (session.currentQuestionIndex < referralSteps.length) {
+    saveSession(contactId, session);
+
+    await sendTextMessage({
+      number: contactId,
+      text: groqResponse.reply
+    });
+
+    return { status: 'next_question', nextQuestionIndex: session.currentQuestionIndex };
+  }
+
+  session.status = 'completed';
+  saveSession(contactId, session);
+
+  const indication = buildIndicationPayload(session);
+  saveIndication(indication);
+
+  await sendTextMessage({
+    number: contactId,
+    text: groqResponse.reply || referralCompletionMessage
+  });
+
+  deleteSession(contactId);
+
+  return { status: 'completed', indication };
+}
