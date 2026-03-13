@@ -35,3 +35,7 @@ export function saveIndication(indication) {
 export function getIndications() {
   return readIndications();
 }
+
+export function hasIndicationForReferrer(referrerWhatsapp) {
+  return readIndications().some((item) => item?.referrerWhatsapp === referrerWhatsapp);
+}
