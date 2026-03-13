@@ -3,7 +3,7 @@ import { createSession, deleteSession, getSession, saveSession } from '../store/
 import { referralCompletionMessage, referralSteps } from '../config/referral-flow.js';
 import { sendTextMessage } from '../services/evolution.service.js';
 import { runReferralStepConversation } from '../services/groq.service.js';
-import { saveIndication } from '../services/indication-store.service.js';
+import { hasIndicationForReferrer, saveIndication } from '../services/indication-store.service.js';
 
 function isObviouslyInsufficient(answer) {
   if (!answer) {
@@ -26,19 +26,39 @@ function buildIndicationPayload(session) {
   };
 }
 
+function buildResumeGreeting(session) {
+  const currentStep = referralSteps[session.currentQuestionIndex];
+  const fallbackPrompt = currentStep?.fallbackPrompts?.[0] || currentStep?.examplePrompt || 'Pode me passar essa informacao?';
+
+  return `Oi! Que bom falar com voce de novo. Seu cadastro da campanha ainda nao foi concluido e eu posso continuar de onde paramos.\n\n${fallbackPrompt}`;
+}
+
+function buildReturningGreeting() {
+  return 'Oi! Que bom ter voce de volta por aqui 😊 Se quiser fazer uma nova indicacao na campanha, eu sigo com voce. Para comecarmos, me passa seu nome completo e o nome da sua empresa cliente MV.';
+}
+
 export async function startQualification(contactId, replyTarget = '') {
   const session = createSession(contactId, replyTarget);
-  const firstStep = referralSteps[0];
-  const groqResponse = await runReferralStepConversation({
-    currentStep: firstStep,
-    previousAnswers: [],
-    latestUserMessage: '',
-    isFirstMessage: true
-  });
+  const hasPreviousIndication = hasIndicationForReferrer(contactId);
+  let openingMessage = '';
+
+  if (hasPreviousIndication) {
+    openingMessage = buildReturningGreeting();
+  } else {
+    const firstStep = referralSteps[0];
+    const groqResponse = await runReferralStepConversation({
+      currentStep: firstStep,
+      previousAnswers: [],
+      latestUserMessage: '',
+      isFirstMessage: true
+    });
+
+    openingMessage = groqResponse.reply;
+  }
 
   await sendTextMessage({
     number: replyTarget || contactId,
-    text: groqResponse.reply
+    text: openingMessage
   });
 
   return session;
@@ -46,6 +66,8 @@ export async function startQualification(contactId, replyTarget = '') {
 
 export async function handleIncomingAnswer({ contactId, text, replyTarget = '' }) {
   let session = getSession(contactId);
+  const normalizedText = String(text || '').trim().toLowerCase();
+  const isGreetingOnly = ['oi', 'ola', 'olá', 'bom dia', 'boa tarde', 'boa noite', 'opa'].includes(normalizedText);
 
   if (!session) {
     session = await startQualification(contactId, replyTarget);
@@ -59,6 +81,17 @@ export async function handleIncomingAnswer({ contactId, text, replyTarget = '' }
 
   if (session.status !== 'collecting') {
     return { status: 'ignored' };
+  }
+
+  if (isGreetingOnly && session.currentQuestionIndex < referralSteps.length) {
+    const resumeMessage = buildResumeGreeting(session);
+
+    await sendTextMessage({
+      number: session.replyTarget || contactId,
+      text: resumeMessage
+    });
+
+    return { status: 'resumed_with_greeting', nextQuestionIndex: session.currentQuestionIndex };
   }
 
   const currentStep = referralSteps[session.currentQuestionIndex];
