@@ -63,12 +63,21 @@ async function sendTypingPresence({ number, delay }) {
 export async function sendTextMessage({ number, text }) {
   const typingDelay = calculateTypingDelay(text);
 
-  await sendTypingPresence({
-    number,
-    delay: typingDelay
-  });
+  try {
+    await sendTypingPresence({
+      number,
+      delay: typingDelay
+    });
 
-  await wait(typingDelay);
+    await wait(typingDelay);
+  } catch (error) {
+    console.error('Falha ao enviar presence para Evolution. Seguindo com envio do texto.', {
+      number,
+      status: error?.response?.status,
+      response: error?.response?.data || null,
+      message: error?.message
+    });
+  }
 
   const response = await evolutionClient.post(`/message/sendText/${env.evolutionInstance}`, {
     number,
