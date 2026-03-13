@@ -4,9 +4,10 @@ export function getSession(contactId) {
   return sessions.get(contactId) || null;
 }
 
-export function createSession(contactId) {
+export function createSession(contactId, replyTarget = '') {
   const session = {
     contactId,
+    replyTarget,
     startedAt: new Date().toISOString(),
     currentQuestionIndex: 0,
     answers: [],

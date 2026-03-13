@@ -27,6 +27,14 @@ function buildWebhookUrl() {
   return `${baseUrl}/webhook/evolution${queryString}`;
 }
 
+function normalizeOutboundNumber(value = '') {
+  return String(value)
+    .replace(/@s\.whatsapp\.net$/i, '')
+    .replace(/@g\.us$/i, '')
+    .replace(/@lid$/i, '')
+    .replace(/\D/g, '');
+}
+
 const TYPING_BPM = 500;
 const MIN_TYPING_MS = 800;
 const MAX_TYPING_MS = 7000;
@@ -51,21 +59,25 @@ function calculateTypingDelay(text) {
 }
 
 async function sendTypingPresence({ number, delay }) {
+  const normalizedNumber = normalizeOutboundNumber(number);
+
   await evolutionClient.post(`/chat/sendPresence/${env.evolutionInstance}`, {
-    number,
+    number: normalizedNumber,
     options: {
       delay,
-      presence: 'composing'
+      presence: 'composing',
+      number: normalizedNumber
     }
   });
 }
 
 export async function sendTextMessage({ number, text }) {
   const typingDelay = calculateTypingDelay(text);
+  const normalizedNumber = normalizeOutboundNumber(number);
 
   try {
     await sendTypingPresence({
-      number,
+      number: normalizedNumber,
       delay: typingDelay
     });
 
@@ -80,14 +92,10 @@ export async function sendTextMessage({ number, text }) {
   }
 
   const response = await evolutionClient.post(`/message/sendText/${env.evolutionInstance}`, {
-    number,
-    textMessage: {
-      text
-    },
-    options: {
-      delay: 0,
-      presence: 'composing'
-    }
+    number: normalizedNumber,
+    text,
+    delay: 0,
+    linkPreview: false
   });
 
   return response.data;
@@ -123,9 +131,15 @@ async function createEvolutionInstance() {
     instanceName: env.evolutionInstance,
     integration: 'WHATSAPP-BAILEYS',
     qrcode: true,
-    webhook: webhookUrl || undefined,
-    webhook_by_events: Boolean(webhookUrl),
-    events: webhookUrl ? ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED'] : undefined,
+    webhook: webhookUrl
+      ? {
+          enabled: true,
+          url: webhookUrl,
+          byEvents: true,
+          base64: false,
+          events: ['MESSAGES_UPSERT', 'CONNECTION_UPDATE', 'QRCODE_UPDATED']
+        }
+      : undefined,
     rejectCall: true,
     msgCall: 'No momento nao atendemos chamadas por aqui.',
     groupsIgnore: true,

@@ -26,8 +26,8 @@ function buildIndicationPayload(session) {
   };
 }
 
-export async function startQualification(contactId) {
-  const session = createSession(contactId);
+export async function startQualification(contactId, replyTarget = '') {
+  const session = createSession(contactId, replyTarget);
   const firstStep = referralSteps[0];
   const groqResponse = await runReferralStepConversation({
     currentStep: firstStep,
@@ -37,19 +37,24 @@ export async function startQualification(contactId) {
   });
 
   await sendTextMessage({
-    number: contactId,
+    number: replyTarget || contactId,
     text: groqResponse.reply
   });
 
   return session;
 }
 
-export async function handleIncomingAnswer({ contactId, text }) {
+export async function handleIncomingAnswer({ contactId, text, replyTarget = '' }) {
   let session = getSession(contactId);
 
   if (!session) {
-    session = await startQualification(contactId);
+    session = await startQualification(contactId, replyTarget);
     return { status: 'started' };
+  }
+
+  if (replyTarget && session.replyTarget !== replyTarget) {
+    session.replyTarget = replyTarget;
+    saveSession(contactId, session);
   }
 
   if (session.status !== 'collecting') {
@@ -68,7 +73,7 @@ export async function handleIncomingAnswer({ contactId, text }) {
     saveSession(contactId, session);
 
     await sendTextMessage({
-      number: contactId,
+      number: session.replyTarget || contactId,
       text: groqResponse.reply
     });
 
@@ -80,7 +85,7 @@ export async function handleIncomingAnswer({ contactId, text }) {
     saveSession(contactId, session);
 
     await sendTextMessage({
-      number: contactId,
+      number: session.replyTarget || contactId,
       text: groqResponse.reply
     });
 
@@ -95,7 +100,7 @@ export async function handleIncomingAnswer({ contactId, text }) {
     saveSession(contactId, session);
 
     await sendTextMessage({
-      number: contactId,
+      number: session.replyTarget || contactId,
       text: groqResponse.reply
     });
 
@@ -109,7 +114,7 @@ export async function handleIncomingAnswer({ contactId, text }) {
   saveIndication(indication);
 
   await sendTextMessage({
-    number: contactId,
+    number: session.replyTarget || contactId,
     text: groqResponse.reply || referralCompletionMessage
   });
 
