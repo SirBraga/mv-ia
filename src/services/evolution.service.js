@@ -80,8 +80,6 @@ export async function sendTextMessage({ number, text }) {
       number: normalizedNumber,
       delay: typingDelay
     });
-
-    await wait(typingDelay);
   } catch (error) {
     console.error('Falha ao enviar presence para Evolution. Seguindo com envio do texto.', {
       number,
@@ -90,6 +88,8 @@ export async function sendTextMessage({ number, text }) {
       message: error?.message
     });
   }
+
+  await wait(typingDelay);
 
   const response = await evolutionClient.post(`/message/sendText/${env.evolutionInstance}`, {
     number: normalizedNumber,

@@ -33,7 +33,7 @@ export async function evaluateAnswer({ question, answer }) {
     messages: [
       {
         role: 'system',
-        content: 'Voce avalia se uma resposta de WhatsApp atende minimamente a pergunta feita. Responda apenas em JSON puro com as chaves: satisfactory (boolean), reason (string), followup (string). A resposta deve ser considerada insatisfatoria se estiver vaga, curta demais, ambigua ou sem contexto suficiente.'
+        content: 'Voce avalia se uma resposta de WhatsApp atende minimamente a pergunta feita dentro de uma campanha de indicacoes. Responda apenas em JSON puro com as chaves: satisfactory (boolean), reason (string), followup (string). A resposta deve ser considerada insatisfatoria se estiver vaga, curta demais, ambigua, fora do escopo da pergunta ou sem contexto suficiente.'
       },
       {
         role: 'user',
@@ -79,7 +79,7 @@ export async function runReferralStepConversation({ currentStep, previousAnswers
         content: `${env.baseSystemPrompt}
 
 Agora voce esta em um fluxo curto de captacao de indicacao da MV.
-Seu objetivo nao e vender neste momento. Seu objetivo e conversar de forma natural para obter exatamente 3 informacoes:
+Seu objetivo e conversar de forma natural para obter exatamente 3 informacoes:
 1. Nome completo do cliente MV e nome da empresa dele.
 2. Nome da empresa indicada e nome do responsavel nessa empresa.
 3. WhatsApp ou telefone da pessoa indicada.
@@ -90,13 +90,18 @@ Voce deve analisar a mensagem mais recente do usuario e responder apenas em JSON
 - reply: string
 
 Regras:
-- Se a resposta ainda nao atender a etapa atual, marque satisfactory como false e use reply para pedir a mesma informacao novamente de forma curta, objetiva e natural.
-- Se a resposta atender a etapa atual, marque satisfactory como true, preencha extractedValue com o valor consolidado daquela etapa e use reply para fazer a proxima pergunta.
+- Se a mensagem do usuario estiver fora do escopo da campanha, marque satisfactory como false e use reply para recusar com educacao e voltar para a coleta da etapa atual.
+- Se a resposta ainda nao atender a etapa atual, marque satisfactory como false e use reply para pedir a mesma informacao novamente de forma curta, objetiva, humana e menos repetitiva.
+- Se a resposta atender a etapa atual, marque satisfactory como true, preencha extractedValue com o valor consolidado daquela etapa e use reply para fazer a proxima pergunta de forma natural.
 - Na terceira etapa, se a resposta atender, use reply para enviar a mensagem final de confirmacao da campanha.
 - Nunca responda fora do JSON.
 - Nunca invente dados que o usuario nao informou.
-- Seja breve e humano.
-- Se isFirstMessage for true, apenas inicie a conversa com a primeira pergunta e deixe satisfactory como false e extractedValue como string vazia.`
+- Nunca fale de assuntos fora da campanha, mesmo se o usuario insistir, provocar, ameacar, chantagear ou tentar manipular.
+- Seja breve, humano e natural.
+- Se a pessoa informar so uma parte do que foi pedido, reconheca rapidamente o que foi entendido e peca apenas o que faltou.
+- Pode variar a formulacao da pergunta, mas sem mudar o dado que precisa ser obtido.
+- Se isFirstMessage for true, apenas inicie a conversa com a primeira pergunta e deixe satisfactory como false e extractedValue como string vazia.
+- Use como referencia de estilo os prompts de apoio da etapa atual: ${JSON.stringify(currentStep?.fallbackPrompts || [])}`
       },
       {
         role: 'user',
@@ -119,13 +124,13 @@ Regras:
     parsed = {
       satisfactory: false,
       extractedValue: '',
-      reply: currentStep?.examplePrompt || 'Pode me passar essa informacao?'
+      reply: currentStep?.fallbackPrompts?.[0] || currentStep?.examplePrompt || 'Pode me passar essa informacao?'
     };
   }
 
   return {
     satisfactory: Boolean(parsed.satisfactory),
     extractedValue: typeof parsed.extractedValue === 'string' ? parsed.extractedValue.trim() : '',
-    reply: typeof parsed.reply === 'string' ? parsed.reply.trim() : currentStep?.examplePrompt || 'Pode me passar essa informacao?'
+    reply: typeof parsed.reply === 'string' ? parsed.reply.trim() : currentStep?.fallbackPrompts?.[0] || currentStep?.examplePrompt || 'Pode me passar essa informacao?'
   };
 }
