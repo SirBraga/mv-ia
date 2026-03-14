@@ -11,6 +11,7 @@ export function createSession(contactId, replyTarget = '') {
     startedAt: new Date().toISOString(),
     currentQuestionIndex: 0,
     answers: [],
+    partialDraft: '',
     repromptCount: 0,
     status: 'collecting'
   };
