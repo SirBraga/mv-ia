@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { env } from '../config/env.js';
+import { referralSteps } from '../config/referral-flow.js';
 import { handleIncomingAnswer } from '../flows/qualification.flow.js';
 import { connectEvolutionInstance } from '../services/evolution.service.js';
 import { getIndications } from '../services/indication-store.service.js';
@@ -23,7 +24,7 @@ function buildFallbackMessageFingerprint(normalized) {
   return [
     normalized.contactId,
     normalized.remoteJid,
-    normalized.text.trim().toLowerCase()
+    String(normalized.normalizedInput || normalized.text || '').trim().toLowerCase()
   ].join('|');
 }
 
@@ -61,6 +62,37 @@ function escapeHtml(value) {
     .replaceAll("'", '&#39;');
 }
 
+function renderKeyValueList(data = {}) {
+  const entries = Object.entries(data || {}).filter(([, value]) => String(value || '').trim());
+
+  if (!entries.length) {
+    return '<li>Nada identificado ainda.</li>';
+  }
+
+  return entries
+    .map(([key, value]) => `<li><strong>${escapeHtml(key)}:</strong> ${escapeHtml(value)}</li>`)
+    .join('');
+}
+
+function renderSemanticEvents(events = []) {
+  const recentEvents = Array.isArray(events) ? events.slice(-6).reverse() : [];
+
+  if (!recentEvents.length) {
+    return '<li>Nenhum evento registrado ainda.</li>';
+  }
+
+  return recentEvents
+    .map((event) => {
+      const details = Object.entries(event)
+        .filter(([key]) => !['type', 'timestamp'].includes(key))
+        .map(([key, value]) => `${key}: ${typeof value === 'string' ? value : JSON.stringify(value)}`)
+        .join(' | ');
+
+      return `<li><strong>${escapeHtml(event.type || 'evento')}</strong>${details ? ` — ${escapeHtml(details)}` : ''}</li>`;
+    })
+    .join('');
+}
+
 function renderAnswersDashboard({ sessions, indications }) {
   const activeSessionsHtml = sessions.length
     ? sessions
@@ -70,6 +102,17 @@ function renderAnswersDashboard({ sessions, indications }) {
                 .map((answer, index) => `<li><strong>Resposta ${index + 1}:</strong> ${escapeHtml(answer || 'Nao informada')}</li>`)
                 .join('')
             : '<li>Nenhuma resposta validada ainda.</li>';
+          const currentStepKey = referralSteps?.[session.currentQuestionIndex]?.key || 'finalizado';
+          const currentStepMemory = session?.stepMemory?.[currentStepKey] || null;
+          const capturedFieldsHtml = renderKeyValueList(currentStepMemory?.capturedFields || {});
+          const missingFieldsHtml = Array.isArray(currentStepMemory?.missingFields) && currentStepMemory.missingFields.length
+            ? currentStepMemory.missingFields.map((field) => `<li>${escapeHtml(field)}</li>`).join('')
+            : '<li>Nada pendente.</li>';
+          const semanticEventsHtml = renderSemanticEvents(session.semanticEvents);
+          const pendingConfirmationText = session?.pendingConfirmation?.value || 'Nenhuma';
+          const lastIntent = session?.lastModelAnalysis?.intent || currentStepMemory?.intent || '-';
+          const lastConfidence = session?.lastModelAnalysis?.confidence ?? currentStepMemory?.confidence ?? 0;
+          const partialDraft = session?.partialDraft || currentStepMemory?.rawDraft || 'Vazio';
 
           return `
             <article class="panel">
@@ -84,8 +127,42 @@ function renderAnswersDashboard({ sessions, indications }) {
                 <div><span>Iniciado em</span><strong>${escapeHtml(session.startedAt || '-')}</strong></div>
                 <div><span>Pergunta atual</span><strong>${Number(session.currentQuestionIndex || 0) + 1}</strong></div>
                 <div><span>Reprompts</span><strong>${Number(session.repromptCount || 0)}</strong></div>
+                <div><span>Etapa</span><strong>${escapeHtml(currentStepKey)}</strong></div>
+                <div><span>Intencao</span><strong>${escapeHtml(lastIntent)}</strong></div>
+                <div><span>Confianca</span><strong>${escapeHtml(`${lastConfidence}%`)}</strong></div>
+              </div>
+              <div class="meta-grid">
+                <div><span>Rascunho atual</span><strong>${escapeHtml(partialDraft)}</strong></div>
+                <div><span>Confirmacao pendente</span><strong>${escapeHtml(pendingConfirmationText)}</strong></div>
+              </div>
+              <div class="section">
+                <div class="section-head">
+                  <div>
+                    <h2>Campos capturados</h2>
+                    <p>O que a IA ja identificou para a etapa atual.</p>
+                  </div>
+                </div>
+                <ul class="answers-list">${capturedFieldsHtml}</ul>
+              </div>
+              <div class="section">
+                <div class="section-head">
+                  <div>
+                    <h2>Campos faltantes</h2>
+                    <p>O que ainda esta pendente na etapa atual.</p>
+                  </div>
+                </div>
+                <ul class="answers-list">${missingFieldsHtml}</ul>
               </div>
               <ul class="answers-list">${answers}</ul>
+              <div class="section">
+                <div class="section-head">
+                  <div>
+                    <h2>Eventos recentes</h2>
+                    <p>Leitura semantica do comportamento do fluxo.</p>
+                  </div>
+                </div>
+                <ul class="answers-list">${semanticEventsHtml}</ul>
+              </div>
             </article>
           `;
         })
@@ -357,8 +434,13 @@ async function handleEvolutionWebhookRequest(req, res, next) {
 
     const result = await handleIncomingAnswer({
       contactId: normalized.contactId,
-      text: normalized.text,
-      replyTarget: normalized.remoteJid
+      text: normalized.normalizedInput,
+      replyTarget: normalized.remoteJid,
+      inputMeta: {
+        hasSharedContact: Boolean(normalized.sharedContact),
+        originalText: normalized.text,
+        sharedContact: normalized.sharedContact
+      }
     });
 
     return res.status(200).json({ ok: true, result });

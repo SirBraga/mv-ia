@@ -13,6 +13,10 @@ export function createSession(contactId, replyTarget = '') {
     answers: [],
     partialDraft: '',
     pendingConfirmation: null,
+    promptHistory: [],
+    semanticEvents: [],
+    stepMemory: {},
+    lastModelAnalysis: null,
     repromptCount: 0,
     status: 'collecting'
   };
