@@ -7,6 +7,50 @@ import { getAllSessions } from '../store/session-store.js';
 import { normalizeEvolutionWebhook } from '../utils/webhook-normalizer.js';
 
 const router = Router();
+const processedWebhookMessages = new Map();
+const PROCESSED_MESSAGE_TTL_MS = 2 * 60 * 1000;
+const FALLBACK_DUPLICATE_WINDOW_MS = 8 * 1000;
+
+function cleanupProcessedMessages(now = Date.now()) {
+  for (const [key, expiresAt] of processedWebhookMessages.entries()) {
+    if (expiresAt <= now) {
+      processedWebhookMessages.delete(key);
+    }
+  }
+}
+
+function buildFallbackMessageFingerprint(normalized) {
+  return [
+    normalized.contactId,
+    normalized.remoteJid,
+    normalized.text.trim().toLowerCase()
+  ].join('|');
+}
+
+function shouldIgnoreDuplicateWebhook(normalized) {
+  const now = Date.now();
+  cleanupProcessedMessages(now);
+
+  if (normalized.messageId) {
+    const messageKey = `id:${normalized.messageId}`;
+
+    if (processedWebhookMessages.has(messageKey)) {
+      return true;
+    }
+
+    processedWebhookMessages.set(messageKey, now + PROCESSED_MESSAGE_TTL_MS);
+  }
+
+  const fallbackKey = `fp:${buildFallbackMessageFingerprint(normalized)}`;
+  const existingExpiry = processedWebhookMessages.get(fallbackKey);
+
+  if (existingExpiry && existingExpiry > now) {
+    return true;
+  }
+
+  processedWebhookMessages.set(fallbackKey, now + FALLBACK_DUPLICATE_WINDOW_MS);
+  return false;
+}
 
 function escapeHtml(value) {
   return String(value || '')
@@ -305,6 +349,10 @@ async function handleEvolutionWebhookRequest(req, res, next) {
 
     if (!normalized.isValidTextMessage) {
       return res.status(200).json({ ignored: true, reason: 'payload_without_supported_text_message' });
+    }
+
+    if (shouldIgnoreDuplicateWebhook(normalized)) {
+      return res.status(200).json({ ignored: true, reason: 'duplicate_webhook_event' });
     }
 
     const result = await handleIncomingAnswer({

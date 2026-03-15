@@ -29,15 +29,33 @@ function buildIndicationPayload(session) {
   };
 }
 
+function pickStepPrompt(step, seed = 0, { includeExample = true } = {}) {
+  const promptPool = [];
+
+  if (includeExample && step?.examplePrompt) {
+    promptPool.push(step.examplePrompt);
+  }
+
+  if (Array.isArray(step?.fallbackPrompts)) {
+    promptPool.push(...step.fallbackPrompts.filter(Boolean));
+  }
+
+  if (!promptPool.length) {
+    return 'Pode me passar essa informacao?';
+  }
+
+  return promptPool[Math.abs(seed) % promptPool.length];
+}
+
 function buildResumeGreeting(session) {
   const currentStep = referralSteps[session.currentQuestionIndex];
-  const fallbackPrompt = currentStep?.fallbackPrompts?.[0] || currentStep?.examplePrompt || 'Pode me passar essa informacao?';
+  const fallbackPrompt = pickStepPrompt(currentStep, session.repromptCount + 1, { includeExample: false });
 
   if (session.pendingConfirmation?.stepIndex === session.currentQuestionIndex) {
     return `Oi! Que bom falar com voce de novo 😊 Antes de eu seguir, so quero confirmar uma coisinha: entendi "${session.pendingConfirmation.value}", certo?`;
   }
 
-  return `Oi! Que bom falar com voce de novo. Seu cadastro da campanha ainda nao foi concluido e eu posso continuar de onde paramos.\n\n${fallbackPrompt}`;
+  return `Oi! Que bom falar com voce de novo 😊 Seu cadastro da campanha ainda nao foi concluido, mas eu continuo com voce de onde paramos.\n\n${fallbackPrompt}`;
 }
 
 function isAffirmative(text) {
@@ -61,13 +79,13 @@ function buildConfirmationPrompt(step, value) {
 }
 
 function buildRetryAfterNegativePrompt(step) {
-  const fallbackPrompt = step?.fallbackPrompts?.[0] || step?.examplePrompt || 'Pode me passar essa informacao?';
+  const fallbackPrompt = pickStepPrompt(step, 2, { includeExample: false });
 
   return `Sem problema! Obrigada por me corrigir 😊 ${fallbackPrompt}`;
 }
 
 function buildReturningGreeting() {
-  return 'Oi! Que bom ter voce de volta por aqui 😊 Se quiser fazer uma nova indicacao na campanha, eu sigo com voce. Para comecarmos, me passa seu nome completo e o nome da sua empresa cliente MV.';
+  return 'Oi! Que bom ter voce de volta por aqui 😊 Se quiser fazer uma nova indicacao na campanha, eu sigo com voce. Para comecarmos, me passe seu nome completo e o nome da sua empresa cliente MV.';
 }
 
 export async function startQualification(contactId, replyTarget = '') {
@@ -142,7 +160,7 @@ export async function handleIncomingAnswer({ contactId, text, replyTarget = '' }
 
         await sendTextMessage({
           number: session.replyTarget || contactId,
-          text: nextStep?.examplePrompt || 'Pode me passar a proxima informacao?'
+          text: pickStepPrompt(nextStep, session.currentQuestionIndex + session.repromptCount) || 'Pode me passar a proxima informacao?'
         });
 
         return { status: 'next_question', nextQuestionIndex: session.currentQuestionIndex };
