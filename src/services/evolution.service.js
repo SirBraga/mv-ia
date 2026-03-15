@@ -40,6 +40,12 @@ const MIN_TYPING_MS = 800;
 const MAX_TYPING_MS = 7000;
 const HUMAN_JITTER_MS = 180;
 
+function wait(ms) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, ms);
+  });
+}
+
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
@@ -52,38 +58,30 @@ function calculateTypingDelay(text) {
   return clamp(Math.round(baseDelayMs + jitter), MIN_TYPING_MS, MAX_TYPING_MS);
 }
 
-export async function sendTextMessage({ number, text }) {
-  const typingDelay = calculateTypingDelay(text);
+async function sendTypingPresence({ number, delay }) {
   const normalizedNumber = normalizeOutboundNumber(number);
-  const endpoint = `/message/sendText/${env.evolutionInstance}`;
+  const endpoint = `/chat/sendPresence/${env.evolutionInstance}`;
 
   try {
-    const response = await evolutionClient.post(endpoint, {
+    await evolutionClient.post(endpoint, {
       number: normalizedNumber,
-      textMessage: {
-        text
-      },
       options: {
-        delay: typingDelay,
+        delay,
         presence: 'composing',
-        linkPreview: false
+        number: normalizedNumber
       }
     });
-
-    return response.data;
+    return;
   } catch (primaryError) {
     try {
-      const legacyResponse = await evolutionClient.post(endpoint, {
+      await evolutionClient.post(endpoint, {
         number: normalizedNumber,
-        text,
-        delay: typingDelay,
-        presence: 'composing',
-        linkPreview: false
+        delay,
+        presence: 'composing'
       });
-
-      return legacyResponse.data;
+      return;
     } catch (legacyError) {
-      console.error('Falha ao enviar mensagem pela Evolution nos formatos novo e legado.', {
+      console.error('Falha ao enviar presence pela Evolution nos formatos novo e legado.', {
         number: normalizedNumber,
         primaryStatus: primaryError?.response?.status,
         primaryResponse: primaryError?.response?.data || null,
@@ -94,6 +92,68 @@ export async function sendTextMessage({ number, text }) {
       });
 
       throw legacyError;
+    }
+  }
+}
+
+export async function sendTextMessage({ number, text }) {
+  const typingDelay = calculateTypingDelay(text);
+  const normalizedNumber = normalizeOutboundNumber(number);
+  const endpoint = `/message/sendText/${env.evolutionInstance}`;
+
+  try {
+    await sendTypingPresence({
+      number: normalizedNumber,
+      delay: typingDelay
+    });
+  } catch (typingError) {
+    console.error('Falha ao acionar typing antes do envio. Seguindo com a mensagem.', {
+      number: normalizedNumber,
+      status: typingError?.response?.status,
+      response: typingError?.response?.data || null,
+      message: typingError?.message
+    });
+  }
+
+  await wait(typingDelay);
+
+  try {
+    const legacyResponse = await evolutionClient.post(endpoint, {
+      number: normalizedNumber,
+      text,
+      delay: 0,
+      presence: 'composing',
+      linkPreview: false
+    });
+
+    return legacyResponse.data;
+  } catch (legacyError) {
+    try {
+      const response = await evolutionClient.post(endpoint, {
+        number: normalizedNumber,
+        textMessage: {
+          text
+        },
+        options: {
+          delay: 0,
+          presence: 'composing',
+          linkPreview: false
+        }
+      });
+
+      return response.data;
+    } catch (modernError) {
+      console.error('Falha ao enviar mensagem pela Evolution nos formatos legado e novo.', {
+        number: normalizedNumber,
+        legacyStatus: legacyError?.response?.status,
+        legacyResponse: legacyError?.response?.data || null,
+        legacyMessage: legacyError?.message,
+        modernStatus: modernError?.response?.status,
+        modernResponse: modernError?.response?.data || null,
+        modernMessage: modernError?.message
+      });
+
+      throw modernError;
     }
   }
 }
