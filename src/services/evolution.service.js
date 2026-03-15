@@ -55,20 +55,47 @@ function calculateTypingDelay(text) {
 export async function sendTextMessage({ number, text }) {
   const typingDelay = calculateTypingDelay(text);
   const normalizedNumber = normalizeOutboundNumber(number);
+  const endpoint = `/message/sendText/${env.evolutionInstance}`;
 
-  const response = await evolutionClient.post(`/message/sendText/${env.evolutionInstance}`, {
-    number: normalizedNumber,
-    textMessage: {
-      text
-    },
-    options: {
-      delay: typingDelay,
-      presence: 'composing',
-      linkPreview: false
+  try {
+    const response = await evolutionClient.post(endpoint, {
+      number: normalizedNumber,
+      textMessage: {
+        text
+      },
+      options: {
+        delay: typingDelay,
+        presence: 'composing',
+        linkPreview: false
+      }
+    });
+
+    return response.data;
+  } catch (primaryError) {
+    try {
+      const legacyResponse = await evolutionClient.post(endpoint, {
+        number: normalizedNumber,
+        text,
+        delay: typingDelay,
+        presence: 'composing',
+        linkPreview: false
+      });
+
+      return legacyResponse.data;
+    } catch (legacyError) {
+      console.error('Falha ao enviar mensagem pela Evolution nos formatos novo e legado.', {
+        number: normalizedNumber,
+        primaryStatus: primaryError?.response?.status,
+        primaryResponse: primaryError?.response?.data || null,
+        primaryMessage: primaryError?.message,
+        legacyStatus: legacyError?.response?.status,
+        legacyResponse: legacyError?.response?.data || null,
+        legacyMessage: legacyError?.message
+      });
+
+      throw legacyError;
     }
-  });
-
-  return response.data;
+  }
 }
 
 export async function connectEvolutionInstance() {
