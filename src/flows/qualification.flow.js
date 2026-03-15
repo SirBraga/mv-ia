@@ -5,6 +5,9 @@ import { sendTextMessage } from '../services/evolution.service.js';
 import { runReferralStepConversation } from '../services/groq.service.js';
 import { hasIndicationForReferrer, saveIndication } from '../services/indication-store.service.js';
 
+const affirmativeAnswers = ['sim', 's', 'isso', 'isso mesmo', 'certo', 'certo sim', 'correto', 'confirmo', 'confirmado', 'pode seguir', 'pode prosseguir', 'ok', 'okay', 'perfeito', 'exato'];
+const negativeAnswers = ['nao', 'não', 'n', 'negativo', 'errado', 'incorreto', 'nao foi isso', 'não foi isso'];
+
 function isObviouslyInsufficient(answer) {
   if (!answer) {
     return true;
@@ -30,7 +33,37 @@ function buildResumeGreeting(session) {
   const currentStep = referralSteps[session.currentQuestionIndex];
   const fallbackPrompt = currentStep?.fallbackPrompts?.[0] || currentStep?.examplePrompt || 'Pode me passar essa informacao?';
 
+  if (session.pendingConfirmation?.stepIndex === session.currentQuestionIndex) {
+    return `Oi! Que bom falar com voce de novo 😊 Antes de eu seguir, so quero confirmar uma coisinha: entendi "${session.pendingConfirmation.value}", certo?`;
+  }
+
   return `Oi! Que bom falar com voce de novo. Seu cadastro da campanha ainda nao foi concluido e eu posso continuar de onde paramos.\n\n${fallbackPrompt}`;
+}
+
+function isAffirmative(text) {
+  return affirmativeAnswers.includes(String(text || '').trim().toLowerCase());
+}
+
+function isNegative(text) {
+  return negativeAnswers.includes(String(text || '').trim().toLowerCase());
+}
+
+function buildConfirmationPrompt(step, value) {
+  const labels = {
+    customerIdentification: 'seu nome completo e a empresa cliente MV',
+    referralCompanyAndContact: 'a empresa indicada e a pessoa responsavel',
+    referralPhone: 'o WhatsApp ou telefone da pessoa indicada'
+  };
+
+  const label = labels[step?.key] || 'essa informacao';
+
+  return `Perfeito! So pra eu confirmar direitinho: entendi ${label} como "${value}", certo?`;
+}
+
+function buildRetryAfterNegativePrompt(step) {
+  const fallbackPrompt = step?.fallbackPrompts?.[0] || step?.examplePrompt || 'Pode me passar essa informacao?';
+
+  return `Sem problema! Obrigada por me corrigir 😊 ${fallbackPrompt}`;
 }
 
 function buildReturningGreeting() {
@@ -95,6 +128,84 @@ export async function handleIncomingAnswer({ contactId, text, replyTarget = '' }
   }
 
   const currentStep = referralSteps[session.currentQuestionIndex];
+
+  if (session.pendingConfirmation && session.pendingConfirmation.stepIndex === session.currentQuestionIndex) {
+    if (isAffirmative(text)) {
+      session.answers[session.currentQuestionIndex] = session.pendingConfirmation.value;
+      session.currentQuestionIndex += 1;
+      session.pendingConfirmation = null;
+      session.repromptCount = 0;
+
+      if (session.currentQuestionIndex < referralSteps.length) {
+        const nextStep = referralSteps[session.currentQuestionIndex];
+        saveSession(contactId, session);
+
+        await sendTextMessage({
+          number: session.replyTarget || contactId,
+          text: nextStep?.examplePrompt || 'Pode me passar a proxima informacao?'
+        });
+
+        return { status: 'next_question', nextQuestionIndex: session.currentQuestionIndex };
+      }
+
+      session.status = 'completed';
+      saveSession(contactId, session);
+
+      const indication = buildIndicationPayload(session);
+      saveIndication(indication);
+
+      await sendTextMessage({
+        number: session.replyTarget || contactId,
+        text: referralCompletionMessage
+      });
+
+      deleteSession(contactId);
+
+      return { status: 'completed', indication };
+    }
+
+    if (isNegative(text)) {
+      session.pendingConfirmation = null;
+      session.repromptCount += 1;
+      saveSession(contactId, session);
+
+      await sendTextMessage({
+        number: session.replyTarget || contactId,
+        text: buildRetryAfterNegativePrompt(currentStep)
+      });
+
+      return { status: 'reprompted', reason: 'user_rejected_confirmation' };
+    }
+
+    const revisedGroqResponse = await runReferralStepConversation({
+      currentStep,
+      previousAnswers: session.answers,
+      latestUserMessage: text
+    });
+
+    if (revisedGroqResponse.satisfactory && revisedGroqResponse.extractedValue) {
+      session.pendingConfirmation = {
+        stepIndex: session.currentQuestionIndex,
+        value: revisedGroqResponse.extractedValue
+      };
+      saveSession(contactId, session);
+
+      await sendTextMessage({
+        number: session.replyTarget || contactId,
+        text: buildConfirmationPrompt(currentStep, revisedGroqResponse.extractedValue)
+      });
+
+      return { status: 'awaiting_confirmation', nextQuestionIndex: session.currentQuestionIndex };
+    }
+
+    await sendTextMessage({
+      number: session.replyTarget || contactId,
+      text: `So pra eu nao registrar errado: o que eu entendi foi "${session.pendingConfirmation.value}". Se estiver certo, me responde "sim". Se nao estiver, pode me mandar novamente do jeitinho correto 😊`
+    });
+
+    return { status: 'awaiting_confirmation', nextQuestionIndex: session.currentQuestionIndex };
+  }
+
   const groqResponse = await runReferralStepConversation({
     currentStep,
     previousAnswers: session.answers,
@@ -125,33 +236,17 @@ export async function handleIncomingAnswer({ contactId, text, replyTarget = '' }
     return { status: 'reprompted', reason: 'insufficient_context' };
   }
 
-  session.answers[session.currentQuestionIndex] = groqResponse.extractedValue || text;
-  session.currentQuestionIndex += 1;
+  session.pendingConfirmation = {
+    stepIndex: session.currentQuestionIndex,
+    value: groqResponse.extractedValue || text
+  };
   session.repromptCount = 0;
-
-  if (session.currentQuestionIndex < referralSteps.length) {
-    saveSession(contactId, session);
-
-    await sendTextMessage({
-      number: session.replyTarget || contactId,
-      text: groqResponse.reply
-    });
-
-    return { status: 'next_question', nextQuestionIndex: session.currentQuestionIndex };
-  }
-
-  session.status = 'completed';
   saveSession(contactId, session);
-
-  const indication = buildIndicationPayload(session);
-  saveIndication(indication);
 
   await sendTextMessage({
     number: session.replyTarget || contactId,
-    text: groqResponse.reply || referralCompletionMessage
+    text: buildConfirmationPrompt(currentStep, session.pendingConfirmation.value)
   });
 
-  deleteSession(contactId);
-
-  return { status: 'completed', indication };
+  return { status: 'awaiting_confirmation', nextQuestionIndex: session.currentQuestionIndex };
 }

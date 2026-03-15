@@ -40,12 +40,6 @@ const MIN_TYPING_MS = 800;
 const MAX_TYPING_MS = 7000;
 const HUMAN_JITTER_MS = 180;
 
-function wait(ms) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, ms);
-  });
-}
-
 function clamp(value, min, max) {
   return Math.min(Math.max(value, min), max);
 }
@@ -58,44 +52,20 @@ function calculateTypingDelay(text) {
   return clamp(Math.round(baseDelayMs + jitter), MIN_TYPING_MS, MAX_TYPING_MS);
 }
 
-async function sendTypingPresence({ number, delay }) {
-  const normalizedNumber = normalizeOutboundNumber(number);
-
-  await evolutionClient.post(`/chat/sendPresence/${env.evolutionInstance}`, {
-    number: normalizedNumber,
-    options: {
-      delay,
-      presence: 'composing',
-      number: normalizedNumber
-    }
-  });
-}
-
 export async function sendTextMessage({ number, text }) {
   const typingDelay = calculateTypingDelay(text);
   const normalizedNumber = normalizeOutboundNumber(number);
 
-  try {
-    await sendTypingPresence({
-      number: normalizedNumber,
-      delay: typingDelay
-    });
-  } catch (error) {
-    console.error('Falha ao enviar presence para Evolution. Seguindo com envio do texto.', {
-      number,
-      status: error?.response?.status,
-      response: error?.response?.data || null,
-      message: error?.message
-    });
-  }
-
-  await wait(typingDelay);
-
   const response = await evolutionClient.post(`/message/sendText/${env.evolutionInstance}`, {
     number: normalizedNumber,
-    text,
-    delay: 0,
-    linkPreview: false
+    textMessage: {
+      text
+    },
+    options: {
+      delay: typingDelay,
+      presence: 'composing',
+      linkPreview: false
+    }
   });
 
   return response.data;

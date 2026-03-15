@@ -12,6 +12,7 @@ export function createSession(contactId, replyTarget = '') {
     currentQuestionIndex: 0,
     answers: [],
     partialDraft: '',
+    pendingConfirmation: null,
     repromptCount: 0,
     status: 'collecting'
   };
