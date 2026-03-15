@@ -9,6 +9,7 @@ const affirmativeAnswers = ['sim', 's', 'isso', 'isso mesmo', 'certo', 'certo si
 const negativeAnswers = ['nao', 'não', 'n', 'negativo', 'errado', 'incorreto', 'nao foi isso', 'não foi isso'];
 const MAX_PROMPT_HISTORY = 20;
 const MAX_SEMANTIC_EVENTS = 30;
+const PRESENTATION_COOLDOWN_MS = 10 * 60 * 1000;
 const stepFields = {
   customerIdentification: ['customerName', 'customerCompany'],
   referralCompanyAndContact: ['referralCompany', 'referralContactName'],
@@ -26,6 +27,7 @@ const stepConfirmationLabels = {
   referralCompanyAndContact: 'a empresa indicada e a pessoa responsavel',
   referralPhone: 'o WhatsApp ou telefone da pessoa indicada'
 };
+const greetingOnlyMessages = ['oi', 'ola', 'olá', 'bom dia', 'boa tarde', 'boa noite', 'opa'];
 
 function isObviouslyInsufficient(answer) {
   if (!answer) {
@@ -61,6 +63,41 @@ function buildCurrentDraft(session, latestUserMessage = '') {
   }
 
   return `${baseDraft}\n${latestDraft}`.trim();
+}
+
+function hasRecentPresentation(session) {
+  if (!session?.presentedAt) {
+    return false;
+  }
+
+  const presentedAt = new Date(session.presentedAt).getTime();
+
+  if (!Number.isFinite(presentedAt)) {
+    return false;
+  }
+
+  return Date.now() - presentedAt < PRESENTATION_COOLDOWN_MS;
+}
+
+function markBotPresented(session, { mode = 'intro' } = {}) {
+  session.hasPresentedBot = true;
+  session.presentationCount = Number(session.presentationCount || 0) + 1;
+  session.presentedAt = new Date().toISOString();
+  session.lastBotMode = mode;
+}
+
+function buildSessionContext(session, currentStep) {
+  return {
+    hasPresentedBot: Boolean(session?.hasPresentedBot),
+    presentationCount: Number(session?.presentationCount || 0),
+    hasRecentPresentation: hasRecentPresentation(session),
+    lastUserIntent: session?.lastUserIntent || '',
+    lastBotMode: session?.lastBotMode || '',
+    lastHandledSocialQuestion: session?.lastHandledSocialQuestion || '',
+    pendingConfirmationValue: session?.pendingConfirmation?.value || '',
+    currentStepKey: getStepKey(currentStep),
+    currentStepMemory: getStepMemory(session, currentStep)
+  };
 }
 
 function getStepKey(stepOrKey) {
@@ -299,7 +336,7 @@ function buildResumeGreeting(session) {
     return `Oi! Que bom falar com voce de novo 😊 Antes de eu seguir, so quero confirmar uma coisinha: foi isso mesmo que eu entendi — "${session.pendingConfirmation.value}"?`;
   }
 
-  return `Oi! Que bom falar com voce de novo 😊 Seu cadastro da campanha ainda nao foi concluido, mas eu continuo com voce de onde paramos.\n\n${fallbackPrompt}`;
+  return `Oi! Que bom falar com voce de novo 😊 ${fallbackPrompt}`;
 }
 
 function isAffirmative(text) {
@@ -345,10 +382,10 @@ function buildRetryAfterNegativePrompt(step, session) {
     step,
     'retry_intro',
     [
-      'Sem problema! Obrigada por me corrigir 😊',
-      'Perfeito, obrigada por me avisar 😊',
-      'Sem estresse, obrigada pela correcao 😊',
-      'Boa! Obrigada por ajustar isso comigo 😊'
+      'Sem problema 😊 Obrigada por me corrigir.',
+      'Perfeito 😊 Obrigada por me avisar.',
+      'Boa 😊 Obrigada por ajustar isso comigo.',
+      'Tranquilo 😊 Vamos acertar isso juntas.'
     ],
     getStepKey(step).length + session.repromptCount
   );
@@ -362,7 +399,99 @@ function buildRetryAfterNegativePrompt(step, session) {
 }
 
 function buildReturningGreeting() {
-  return 'Oi! Que bom ter voce de volta por aqui 😊 Se quiser fazer uma nova indicacao na campanha, eu sigo com voce. Para comecarmos, me passe seu nome completo e o nome da sua empresa cliente MV.';
+  return 'Oi! Que bom te ver por aqui de novo 😊 Se quiser fazer uma nova indicacao, eu sigo com voce. Me manda seu nome completo e a empresa cliente MV.';
+}
+
+function getShortStepRetake(step, session, kind = 'short_retake_prompt') {
+  return pickStepPrompt(step, session, {
+    kind,
+    includeExample: false,
+    seed: session.repromptCount + getStepKey(step).length
+  });
+}
+
+function buildIdentityReply(session, step) {
+  const identityLine = selectPromptFromPool(
+    session,
+    step,
+    'identity_reply',
+    [
+      'Sou a Drica 😊 To te ajudando aqui com a campanha de indicacoes da MV.',
+      'Sou a Drica 😊 Cuido desse atendimento da campanha por aqui.',
+      'Sou a Drica 😊 Estou te acompanhando nessa etapa da campanha.'
+    ],
+    Number(session.presentationCount || 0) + getStepKey(step).length
+  );
+
+  return `${identityLine}\n${getShortStepRetake(step, session, 'identity_retake_prompt')}`;
+}
+
+function buildProcessReply(session, step) {
+  const processLine = selectPromptFromPool(
+    session,
+    step,
+    'process_reply',
+    [
+      'E bem rapidinho 😊 Eu vou te pedindo os dados da campanha por etapa.',
+      'Funciona de forma simples 😊 Eu te peço uma info por vez e vou confirmando com voce.',
+      'Eu vou registrando sua indicacao aos poucos e confirmando tudo com voce 😊'
+    ],
+    session.repromptCount + getStepKey(step).length
+  );
+
+  return `${processLine}\n${getShortStepRetake(step, session, 'process_retake_prompt')}`;
+}
+
+function buildNoiseReply(session, step, intent = 'noise') {
+  const promptKind = intent === 'message_test' ? 'message_test_reply' : 'noise_reply';
+  const line = selectPromptFromPool(
+    session,
+    step,
+    promptKind,
+    intent === 'message_test'
+      ? [
+          'Recebi seu teste por aqui 😊',
+          'To por aqui sim 😊',
+          'Chegou certinho por aqui 😄'
+        ]
+      : [
+          'Nao consegui entender essa mensagem direitinho 😅',
+          'Recebi sua mensagem, mas ainda nao deu pra aproveitar essa parte 😊',
+          'Essa mensagem veio meio solta por aqui 😅'
+        ],
+    session.repromptCount + String(step?.objective || '').length
+  );
+
+  return `${line}\n${getShortStepRetake(step, session, 'noise_retake_prompt')}`;
+}
+
+function isSocialIntent(intent) {
+  return ['identity_question', 'process_question', 'message_test', 'noise'].includes(intent);
+}
+
+function buildSocialReply(intent, session, step) {
+  if (intent === 'identity_question') {
+    return buildIdentityReply(session, step);
+  }
+
+  if (intent === 'process_question') {
+    return buildProcessReply(session, step);
+  }
+
+  return buildNoiseReply(session, step, intent);
+}
+
+function updateSocialState(session, intent) {
+  session.lastUserIntent = intent;
+
+  if (intent === 'identity_question' || intent === 'process_question') {
+    session.lastHandledSocialQuestion = intent;
+    session.lastBotMode = 'social_reply';
+  }
+
+  if (intent === 'message_test' || intent === 'noise') {
+    session.lastBotMode = 'noise_recovery';
+  }
 }
 
 function updateSessionWithModelAnalysis(session, step, analysis, currentDraft, inputMeta = {}) {
@@ -485,6 +614,10 @@ export async function startQualification(contactId, replyTarget = '') {
     openingMessage = groqResponse.reply;
   }
 
+  markBotPresented(session, {
+    mode: 'intro'
+  });
+
   saveSession(contactId, session);
 
   await sendTextMessage({
@@ -498,7 +631,7 @@ export async function startQualification(contactId, replyTarget = '') {
 export async function handleIncomingAnswer({ contactId, text, replyTarget = '', inputMeta = {} }) {
   let session = getSession(contactId);
   const normalizedText = String(text || '').trim().toLowerCase();
-  const isGreetingOnly = ['oi', 'ola', 'olá', 'bom dia', 'boa tarde', 'boa noite', 'opa'].includes(normalizedText);
+  const isGreetingOnly = greetingOnlyMessages.includes(normalizedText);
 
   if (!session) {
     session = await startQualification(contactId, replyTarget);
@@ -608,11 +741,36 @@ export async function handleIncomingAnswer({ contactId, text, replyTarget = '', 
         previousAnswers: session.answers,
         latestUserMessage: text,
         currentDraft,
-        inputMeta
+        inputMeta,
+        sessionContext: buildSessionContext(session, currentStep)
       }),
       currentDraft,
       inputMeta
     );
+
+    session.lastUserIntent = revisedAnalysis.intent;
+
+    if (isSocialIntent(revisedAnalysis.intent)) {
+      session.partialDraft = '';
+      session.repromptCount = 0;
+      updateSocialState(session, revisedAnalysis.intent);
+      appendSemanticEvent(session, revisedAnalysis.intent, {
+        stepKey: getStepKey(currentStep),
+        duringConfirmation: true
+      });
+      saveSession(contactId, session);
+
+      await sendTextMessage({
+        number: session.replyTarget || contactId,
+        text: buildSocialReply(revisedAnalysis.intent, session, currentStep)
+      });
+
+      return {
+        status: 'social_reply',
+        reason: revisedAnalysis.intent,
+        nextQuestionIndex: session.currentQuestionIndex
+      };
+    }
 
     if (revisedAnalysis.satisfactory && revisedAnalysis.extractedValue) {
       session.partialDraft = '';
@@ -660,15 +818,40 @@ export async function handleIncomingAnswer({ contactId, text, replyTarget = '', 
       previousAnswers: session.answers,
       latestUserMessage: text,
       currentDraft,
-      inputMeta
+      inputMeta,
+      sessionContext: buildSessionContext(session, currentStep)
     }),
     currentDraft,
     inputMeta
   );
 
+  session.lastUserIntent = analysis.intent;
+
+  if (isSocialIntent(analysis.intent)) {
+    session.partialDraft = '';
+    session.repromptCount = 0;
+    updateSocialState(session, analysis.intent);
+    appendSemanticEvent(session, analysis.intent, {
+      stepKey: getStepKey(currentStep)
+    });
+    saveSession(contactId, session);
+
+    await sendTextMessage({
+      number: session.replyTarget || contactId,
+      text: buildSocialReply(analysis.intent, session, currentStep)
+    });
+
+    return {
+      status: 'social_reply',
+      reason: analysis.intent,
+      nextQuestionIndex: session.currentQuestionIndex
+    };
+  }
+
   if (!analysis.satisfactory) {
     session.partialDraft = currentDraft;
     session.repromptCount += 1;
+    session.lastBotMode = 'reprompt';
     saveSession(contactId, session);
 
     await sendTextMessage({
@@ -692,6 +875,7 @@ export async function handleIncomingAnswer({ contactId, text, replyTarget = '', 
   };
   session.partialDraft = '';
   session.repromptCount = 0;
+  session.lastBotMode = 'confirmation';
   appendSemanticEvent(session, 'awaiting_confirmation', {
     stepKey: getStepKey(currentStep),
     confidence: analysis.confidence

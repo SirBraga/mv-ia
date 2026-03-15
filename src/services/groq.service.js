@@ -77,7 +77,8 @@ export async function runReferralStepConversation({
   latestUserMessage,
   isFirstMessage = false,
   currentDraft = '',
-  inputMeta = {}
+  inputMeta = {},
+  sessionContext = {}
 }) {
   const expectedFields = stepFieldSchemas[currentStep?.key] || [];
   const completion = await groq.chat.completions.create({
@@ -123,11 +124,16 @@ Regras:
 - Se a entrada tiver vindo de um contato compartilhado, trate isso como um envio valido de telefone/WhatsApp quando fizer sentido para a etapa atual.
 - Se a entrada tiver vindo de um contato compartilhado na etapa do telefone, voce pode responder com naturalidade reconhecendo isso, como quem recebeu um contato salvo.
 - Se a pessoa mandar apenas uma saudacao, responda com saudacao calorosa antes de orientar o primeiro passo.
+- Se a pessoa perguntar quem voce e, classifique como identity_question e responda em uma frase curta, sem repetir a apresentacao completa, especialmente se voce ja tiver se apresentado antes.
+- Se a pessoa perguntar como funciona, o que precisa enviar ou algo curto sobre o processo, classifique como process_question e responda em uma frase curta antes de retomar a etapa.
+- Se a mensagem parecer teste, ruido ou texto sem sentido como "teste", "asd", "123", classifique como message_test ou noise, responda com leveza e retome a etapa atual sem reiniciar a conversa.
 - Se a pessoa disser que nao entendeu, responda explicando de forma simples o que ela precisa fazer antes de repetir o pedido.
+- Se o contexto informar que voce ja se apresentou, nunca repita blocos longos como "Oi, eu sou a Drica..." ou o onboarding completo.
+- Em duvidas sociais e retomadas, prefira no maximo 2 frases curtas.
 - Pode variar a formulacao da pergunta, mas sem mudar o dado que precisa ser obtido.
 - Se isFirstMessage for true, apenas inicie a conversa com a primeira pergunta e deixe satisfactory como false e extractedValue como string vazia.
 - O campo confidence deve ir de 0 a 100.
-- O campo intent deve ser um destes valores: greeting, partial_answer, full_answer, correction, confusion, off_topic, unclear.
+- O campo intent deve ser um destes valores: greeting, partial_answer, full_answer, correction, confusion, off_topic, unclear, identity_question, process_question, message_test, noise.
 - O campo capturedFields deve usar apenas os nomes esperados para a etapa atual quando fizer sentido.
 - O campo missingFields deve listar apenas os nomes de campos ainda faltantes para a etapa atual.
 - Campos esperados para a etapa atual: ${JSON.stringify(expectedFields)}
@@ -141,6 +147,7 @@ Regras:
           respostasJaColetadas: previousAnswers,
           rascunhoAtualDaEtapa: currentDraft,
           metadadosDaEntrada: inputMeta,
+          contextoDaSessao: sessionContext,
           mensagemMaisRecenteDoUsuario: latestUserMessage
         })
       }

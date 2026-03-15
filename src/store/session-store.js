@@ -17,6 +17,12 @@ export function createSession(contactId, replyTarget = '') {
     semanticEvents: [],
     stepMemory: {},
     lastModelAnalysis: null,
+    hasPresentedBot: false,
+    presentationCount: 0,
+    presentedAt: '',
+    lastUserIntent: '',
+    lastBotMode: '',
+    lastHandledSocialQuestion: '',
     repromptCount: 0,
     status: 'collecting'
   };
@@ -32,6 +38,10 @@ export function saveSession(contactId, session) {
 
 export function deleteSession(contactId) {
   sessions.delete(contactId);
+}
+
+export function clearAllSessions() {
+  sessions.clear();
 }
 
 export function getAllSessions() {

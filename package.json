@@ -5,6 +5,7 @@
   "type": "module",
   "main": "src/index.js",
   "scripts": {
+    "build": "node --check src/index.js && node --check src/app.js && node --check src/routes/webhook.routes.js && node --check src/flows/qualification.flow.js && node --check src/services/groq.service.js && node --check src/store/session-store.js && node --check src/utils/webhook-normalizer.js",
     "dev": "node --watch src/index.js",
     "start": "node src/index.js"
   },
